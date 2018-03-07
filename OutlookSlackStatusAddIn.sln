@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.27130.2020
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OutlookSlackStatusAddIn", "OutlookSlackStatusAddIn\OutlookSlackStatusAddIn.csproj", "{009586D4-D4CF-421A-98E0-DC2092CC3113}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{009586D4-D4CF-421A-98E0-DC2092CC3113}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{009586D4-D4CF-421A-98E0-DC2092CC3113}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{009586D4-D4CF-421A-98E0-DC2092CC3113}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{009586D4-D4CF-421A-98E0-DC2092CC3113}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7C78AB48-31A3-43DD-800F-5739C34B3050}
+	EndGlobalSection
+EndGlobal
