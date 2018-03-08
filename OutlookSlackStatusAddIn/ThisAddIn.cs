@@ -31,24 +31,19 @@ namespace OutlookSlackStatusAddIn
             Application.Reminder += ThisAddIn_Reminder;
             Application.Reminders.BeforeReminderShow += ThisAddin_BeforeReminderShow;
 
-            var configFileName = Path.Combine(Path.GetDirectoryName(typeof(ThisAddIn).Assembly.Location), "Slack Status Update.xml");
-            if (File.Exists(configFileName))
-            {
-                var configXmlDoc = new XmlDocument();
-                configXmlDoc.Load(configFileName);
+            _config = new SlackStatusAddInConfig();
 
-                _config = new SlackStatusAddInConfig(configXmlDoc);
-            }
-            else
+            if (_config.MySlackToken == null || _config.MyLastName == null)
             {
-                Process.Start(Path.GetDirectoryName(configFileName));
-
-                string errMsg = "The configuration file for this add-in could not be found:\n" +
-                                $"   {configFileName}\n" + "\n" + "Add it to the opened folder.\n" + 
+                string errMsg = "A number of Windows environment variables need set to make this\n" +
+                                "add-in work.\n" +
                                 "\n" +
-                                "Do not forget to update the entries for mySlackToken, slackWindowTitle, and networkOffice.\n" +
-                                "\n" +
-                                "YOU MUST THEN CLOSE AND RESTART OUTLOOK!";
+                                "INSTRUCTIONS:\n" +
+                                "- Update the contents of \"Slack Status Update Config.bat\"\n" +
+                                "- Run \"Slack Status Update Config.bat\"\n" +
+                                "- Logout of Windows or reboot\n" +
+                                "- From a command prompt, run \"SET\" to verify your changes took\n" +
+                                "- Delete \"Slack Status Update Config.bat\" - you don't need it anymore!";
                 MessageBox.Show(errMsg, @"Slack Status Update Add-In for Outlook", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -188,7 +183,7 @@ namespace OutlookSlackStatusAddIn
         {
             var networkStatus = GetNetworkStatus();
 
-            if (Regex.IsMatch(networkStatus, _config.NetworkOffice, RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(networkStatus, _config.OfficeNetworkNames, RegexOptions.IgnoreCase))
             {
                 SetSlackStatus(_config.WorkingInOffice);
             }
@@ -215,6 +210,7 @@ namespace OutlookSlackStatusAddIn
                 ? wifiStatus
                 : GetEthernetStatus();
         }
+
 
         private string GetWifiStatus() {
             // Private - Get the user's wifi network status. Return values are:

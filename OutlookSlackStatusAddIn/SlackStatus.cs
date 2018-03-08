@@ -8,10 +8,11 @@ namespace OutlookSlackStatusAddIn
         {
         }
 
-        public SlackStatus(XmlNode slackSettingXml)
+        public SlackStatus(string slackStatusAsDelimitedText)
         {
-            Text = slackSettingXml.SelectSingleNode("text")?.InnerText;
-            Emoji = slackSettingXml.SelectSingleNode("emoji")?.InnerText;
+            var parts = slackStatusAsDelimitedText.Split('|');
+            Text = parts[0];
+            Emoji = parts[1];
         }
 
         public string Text;
