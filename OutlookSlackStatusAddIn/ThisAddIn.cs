@@ -5,11 +5,9 @@ using System.Text;
 using System.Windows.Forms;
 using Outlook = Microsoft.Office.Interop.Outlook;
 using System.Text.RegularExpressions;
-using System.Xml;
 using System.Web.Script.Serialization;
-
-
 using System.Net;
+using System.Net.NetworkInformation;
 
 namespace OutlookSlackStatusAddIn
 {
@@ -31,10 +29,14 @@ namespace OutlookSlackStatusAddIn
             Application.Reminder += ThisAddIn_Reminder;
             Application.Reminders.BeforeReminderShow += ThisAddin_BeforeReminderShow;
 
+            WriteToLog("Starting");
+
             _config = new SlackStatusAddInConfig();
 
             if (_config.MySlackToken == null || _config.MyLastName == null)
             {
+                WriteToLog("  CONFIGURATION ERROR- No environment variables");
+
                 string errMsg = "A number of Windows environment variables need set to make this\n" +
                                 "add-in work.\n" +
                                 "\n" +
@@ -54,11 +56,18 @@ namespace OutlookSlackStatusAddIn
             if (item is Outlook.AppointmentItem myAppointmentItem)
             {
                 // This is the reminder for the start of an appointment
+                WriteToLog("ThisAddIn_Reminder for APPOINTMENT: " + myAppointmentItem.Subject);
+                WriteToLog("  Body: " + TruncateAndCleanUpText(myAppointmentItem.Body));
+                WriteToLog("  Start: " + myAppointmentItem.Start + ", End: " + myAppointmentItem.End + ", BusyStatus: " + myAppointmentItem.BusyStatus);
 
-                if (DateTime.Now >= myAppointmentItem.Start && myAppointmentItem.BusyStatus != Outlook.OlBusyStatus.olFree)
+                if (DateTime.Now >= myAppointmentItem.Start && DateTime.Now < myAppointmentItem.End && myAppointmentItem.BusyStatus != Outlook.OlBusyStatus.olFree)
                 {
+                    // This reminder has fired sometime between the start and end of the appointment, 
+                    // and the appointment has me bus, or out of the office, etc.
+
                     if (myAppointmentItem.Subject.Contains("PTO") && myAppointmentItem.Organizer.Contains(_config.MyLastName))
                     {
+                        WriteToLog("    Is PTO");
                         // This appointment is for my PTO
 
                         var slackStatusText = GetSlackStatus().Item1;
@@ -69,6 +78,7 @@ namespace OutlookSlackStatusAddIn
                             if (DateTime.Now >= myAppointmentItem.End)
                             {
                                 // My PTO is over
+                                WriteToLog("    PTO is OVER");
                                 SetSlackStatusBasedOnNetwork();
                             }
                             else
@@ -77,11 +87,14 @@ namespace OutlookSlackStatusAddIn
                                 // for the time my PTO ends. When the reminder fires, this 
                                 // will fire for that task, and we will set our Slack status 
                                 // appropriately.
+                                WriteToLog("    PTO is -NOT- over");
                                 CreateTaskWithReminder(myAppointmentItem);
                             }
                         }
                         else
                         {
+                            WriteToLog("    Is -NOT- PTO");
+
                             // I'm not on PTO
                             if (DateTime.Now >= myAppointmentItem.Start)
                             {
@@ -114,6 +127,8 @@ namespace OutlookSlackStatusAddIn
                     }
                     else
                     {
+                        WriteToLog("    Is not my PTO");
+
                         // For this appointment/meeting, we want to change Slack status if
                         //   - Meeting is starting now or has already started
                         //   - I am not free (ASSUMES that if I add a meeting to my calendar and status is Free, 
@@ -130,14 +145,30 @@ namespace OutlookSlackStatusAddIn
 
             else if (item is Outlook.TaskItem myTaskItem)
             {
+                WriteToLog("ThisAddIn_Reminder for TASK: " + TruncateAndCleanUpText(myTaskItem.Subject));
+                WriteToLog("  ReminderTime: " + myTaskItem.ReminderTime);
+
                 // This is the reminder for the task that marks the end of the approintment
                 if (myTaskItem.Subject.Contains(TASK_PREFIX))
                 {
+                    WriteToLog("    Deleting task");
                     myTaskItem.Delete();
 
+                    WriteToLog("    Setting slack status");
                     SetSlackStatusBasedOnNetwork();
                 }
             }
+        }
+
+
+        private string TruncateAndCleanUpText(string subject)
+        {
+
+            var regex = new Regex("[\t\r\n]");
+
+            var cleanedUpText = regex.Replace(subject, " ");
+
+            return (cleanedUpText.Length > 50) ? $"{cleanedUpText.Substring(0, 50)}..." : cleanedUpText;
         }
 
 
@@ -179,15 +210,29 @@ namespace OutlookSlackStatusAddIn
         }
 
 
+        private bool connectedToInternet()
+        {
+            var connected = false;
+
+            try
+            {
+                connected = new Ping().Send("www.google.com.mx").Status == IPStatus.Success;
+            }
+            catch 
+            {
+                connected = false;
+            }
+
+            return connected;
+        }
+
         private void SetSlackStatusBasedOnNetwork()
         {
-            var networkStatus = GetNetworkStatus();
-
-            if (Regex.IsMatch(networkStatus, _config.OfficeNetworkNames, RegexOptions.IgnoreCase))
+            if (AmNearOfficeWifiNetwork())
             {
                 SetSlackStatus(_config.WorkingInOffice);
             }
-            else if (Regex.IsMatch(networkStatus, "connected-", RegexOptions.IgnoreCase))
+            else if (connectedToInternet())
             {
                 SetSlackStatus(_config.WorkingRemotely);
             }
@@ -199,55 +244,25 @@ namespace OutlookSlackStatusAddIn
         }
 
 
-        private string GetNetworkStatus() {
-            // Get the user's network status. Return values are:
-            //   disconnected............User is not connected to a wifi network or via wired ethernet
-            //      connected-ethernet...User is connected to network via ethernet cable
-            //      connected-xxxxx......Where xxxxx is the SSID of the network
-            var wifiStatus = GetWifiStatus();
+        private bool AmNearOfficeWifiNetwork()
+        {
+            // Look at each wifi network that is available to the user. If any of them
+            // match the regular expression _config.OfficeNetworkNames then we are at
+            // work.
+            var atWork = false;
 
-            return Regex.IsMatch(wifiStatus, "connected-", RegexOptions.IgnoreCase)
-                ? wifiStatus
-                : GetEthernetStatus();
-        }
-
-
-        private string GetWifiStatus() {
-            // Private - Get the user's wifi network status. Return values are:
-            //   disconnected......User is not connected to a wifi network
-            //   connected-xxxxx...User is connected to network with wifi SSID of xxxxx
-            var networkInterfaces = RunShell("cmd.exe", "/c netsh wlan show interface");
-
-            var networkStatus = "";
-            if (Regex.IsMatch(networkInterfaces, @"state\s+:\sconnected", RegexOptions.IgnoreCase))
+            var allNetworks = RunShell("cmd.exe", "/c netsh wlan show networks");
+            MatchCollection matches = Regex.Matches(allNetworks, @"\r\nssid.+?:\s(.*)\r\n", RegexOptions.IgnoreCase|RegexOptions.Multiline);
+            foreach (Match match in matches)
             {
-                var networkSsid = Regex
-                    .Match(networkInterfaces, $"\\s+ssid\\s+:\\s+([a-zA-Z0-9 _]*?){CRLF}", RegexOptions.IgnoreCase)
-                    .Result("$1")
-                    .ToLower();
-                networkStatus = $"connected-{networkSsid}";
-            }
-            else
-            {
-                networkStatus = "disconnected";
+                if (match.Groups.Count > 1 && Regex.IsMatch(match.Groups[1].Value, _config.OfficeNetworkNames, RegexOptions.IgnoreCase))
+                {
+                    atWork = true;
+                    break;
+                }
             }
 
-            return networkStatus;
-        }
-
-
-        private string GetEthernetStatus() {
-            // Private - Get the user's ethernet network status. Return values are:
-            //   disconnected.........User is not connected to wired ethernet
-            //   connected-ethernet...User is connected to wired ethernet
-            const string text = @"[a-zA-Z0-9 -:]*?";
-
-            var networkInterfaces = RunShell("cmd.exe", "/c netsh lan show interface");
-
-            return Regex.IsMatch(networkInterfaces,
-                $"name\\s*: ethernet{CRLF}{text}{CRLF}{text}{CRLF}{text}{CRLF}\\s*?state\\s*:\\sconnected.", RegexOptions.IgnoreCase)
-                ? "connected-ethernet" 
-                : "disconnected";
+            return atWork;
         }
 
 
@@ -273,8 +288,10 @@ namespace OutlookSlackStatusAddIn
         }        
 
 
-        private void SetSlackStatus(SlackStatus slackStatus )
+        private void SetSlackStatus(SlackStatus slackStatus)
         {
+            WriteToLog("      >> Setting Slack status to " + slackStatus.Emoji + " " + slackStatus.Text);
+
             byte[] byteArray = Encoding.UTF8.GetBytes(
                 $"profile={{'status_text': '{slackStatus.Text}', 'status_emoji': '{slackStatus.Emoji}'}}");
 
@@ -342,6 +359,14 @@ namespace OutlookSlackStatusAddIn
             //    must run when Outlook shuts down, see https://go.microsoft.com/fwlink/?LinkId=506785
         }
 
+
+        private void WriteToLog(string whatToWrite)
+        {
+            using (StreamWriter outputFile = new StreamWriter(@"C:\Temp\SlackStatusUpdateAddIn.log", true))
+            {
+                outputFile.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}: {whatToWrite}");
+            }
+        }
 
         #region VSTO generated code
 
