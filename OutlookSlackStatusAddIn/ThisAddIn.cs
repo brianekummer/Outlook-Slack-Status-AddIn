@@ -16,10 +16,6 @@ namespace OutlookSlackStatusAddIn
         // To deploy rebuild a setup.exe for this addin, right-click the PROJECT "OutlookSlackStatusAddin"
         // and select "Publish"
         
-
-        private const string TASK_PREFIX = @"SLACK-STATUS-UPDATE";
-        private const string CRLF = @"(\n|\r|\r\n)";
-
         private SlackStatusAddInConfig _config;
         private WebRequest _webRequest;
 
@@ -27,7 +23,6 @@ namespace OutlookSlackStatusAddIn
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
             Application.Reminder += ThisAddIn_Reminder;
-            Application.Reminders.BeforeReminderShow += ThisAddin_BeforeReminderShow;
 
             WriteToLog("Starting");
 
@@ -74,26 +69,13 @@ namespace OutlookSlackStatusAddIn
 
                         if (slackStatusText.Contains("On PTO"))
                         {
-                            // My Slack status says I'm on already PTO
-                            if (DateTime.Now >= myAppointmentItem.End)
-                            {
-                                // My PTO is over
-                                WriteToLog("    PTO is OVER");
-                                SetSlackStatusBasedOnNetwork();
-                            }
-                            else
-                            {
-                                // My PTO is not yet over, so create a task with a reminder
-                                // for the time my PTO ends. When the reminder fires, this 
-                                // will fire for that task, and we will set our Slack status 
-                                // appropriately.
-                                WriteToLog("    PTO is -NOT- over");
-                                CreateTaskWithReminder(myAppointmentItem);
-                            }
+                            // My Slack status says I'm on already PTO. Whatever set my status to PTO should have set the 
+                            // expiration for that status.
                         }
                         else
                         {
                             WriteToLog("    Is -NOT- PTO");
+                            long slackStatusExpiration = 0;
 
                             // I'm not on PTO
                             if (DateTime.Now >= myAppointmentItem.Start)
@@ -105,6 +87,7 @@ namespace OutlookSlackStatusAddIn
                                 {
                                     // PTO ends sometime today or at midnight tomorrow
                                     slackStatusText += "today";
+                                    slackStatusExpiration = ConvertDateTimeToUnixTimeSeconds(myAppointmentItem.End);
                                 }
                                 else
                                 {
@@ -119,9 +102,15 @@ namespace OutlookSlackStatusAddIn
                                         ? "dddd"
                                         : "dddd, MMM d";
                                     slackStatusText += "until " + nextWorkingDay.ToString(dateFormat);
+                                    slackStatusExpiration = ConvertDateTimeToUnixTimeSeconds(nextWorkingDay);
                                 }
 
-                                SetSlackStatus(new SlackStatus { Text = slackStatusText, Emoji = _config.OnVacation.Emoji });
+                                SetSlackStatus(new SlackStatus
+                                {
+                                    Text = slackStatusText,
+                                    Emoji = _config.OnVacation.Emoji,
+                                    Expiration = slackStatusExpiration 
+                                });
                             }
                         }
                     }
@@ -133,32 +122,25 @@ namespace OutlookSlackStatusAddIn
                         //   - Meeting is starting now or has already started
                         //   - I am not free (ASSUMES that if I add a meeting to my calendar and status is Free, 
                         //     then I want to be available by Slack)
-                        SetSlackStatus(_config.InMeeting);
-
-                        // Create a task with a reminder for the time the meeting ends.
-                        // When the reminder fires, this will fire for that task, and
-                        // we will set our Slack status appropriately.
-                        CreateTaskWithReminder(myAppointmentItem);
+                        var newStatus = new SlackStatus
+                        {
+                            Text = _config.InMeeting.Text,
+                            Emoji = _config.InMeeting.Emoji,
+                            Expiration = ConvertDateTimeToUnixTimeSeconds(myAppointmentItem.End)
+                        };
+                        SetSlackStatus(newStatus);
                     }
                 }
             }
-
-            else if (item is Outlook.TaskItem myTaskItem)
-            {
-                WriteToLog("ThisAddIn_Reminder for TASK: " + TruncateAndCleanUpText(myTaskItem.Subject));
-                WriteToLog("  ReminderTime: " + myTaskItem.ReminderTime);
-
-                // This is the reminder for the task that marks the end of the approintment
-                if (myTaskItem.Subject.Contains(TASK_PREFIX))
-                {
-                    WriteToLog("    Deleting task");
-                    myTaskItem.Delete();
-
-                    WriteToLog("    Setting slack status");
-                    SetSlackStatusBasedOnNetwork();
-                }
-            }
         }
+
+
+
+        private long ConvertDateTimeToUnixTimeSeconds(DateTime dateTime)
+        {
+            return ((DateTimeOffset)dateTime).ToUnixTimeSeconds();
+        }
+
 
 
         private string TruncateAndCleanUpText(string subject)
@@ -169,44 +151,6 @@ namespace OutlookSlackStatusAddIn
             var cleanedUpText = regex.Replace(subject, " ");
 
             return (cleanedUpText.Length > 50) ? $"{cleanedUpText.Substring(0, 50)}..." : cleanedUpText;
-        }
-
-
-        private void CreateTaskWithReminder(Outlook.AppointmentItem myAppointmentItem)
-        {
-            // Create a task with a reminder for the time the meeting ends.
-            // When the reminder fires, this will fire for that task, and
-            // we will set our Slack status appropriately.
-            var olTask = Application.CreateItem(Outlook.OlItemType.olTaskItem);
-            olTask.Subject = $"{TASK_PREFIX}-{myAppointmentItem.Subject}:{myAppointmentItem.Start:yyyyMMddHHmmss}-{myAppointmentItem.End:yyyyMMddHHmmss}";
-            olTask.Status = Outlook.OlTaskStatus.olTaskInProgress;
-            olTask.Importance = Outlook.OlImportance.olImportanceLow;
-            olTask.ReminderSet = true;
-            olTask.ReminderTime = myAppointmentItem.End;
-            olTask.Save();
-        }
-
-
-        private void ThisAddin_BeforeReminderShow(ref bool cancel)
-        {
-            // Automatically close the reminder for the task that we 
-            // created that fires at the end of the appointment
-            //
-            // NOTE that this sometimes can take several seconds to
-            // close the reminder
-
-            foreach (Outlook.Reminder objRem in Application.Reminders)
-            {
-                if (objRem.Caption.Contains(TASK_PREFIX))
-                {
-                    if (objRem.IsVisible)
-                    {
-                        objRem.Dismiss();
-                        cancel = true;
-                    }
-                    break;
-                }
-            }
         }
 
 
@@ -293,7 +237,7 @@ namespace OutlookSlackStatusAddIn
             WriteToLog("      >> Setting Slack status to " + slackStatus.Emoji + " " + slackStatus.Text);
 
             byte[] byteArray = Encoding.UTF8.GetBytes(
-                $"profile={{'status_text': '{slackStatus.Text}', 'status_emoji': '{slackStatus.Emoji}'}}");
+                $"profile={{'status_text': '{slackStatus.Text}', 'status_emoji': '{slackStatus.Emoji}', 'status_expiration': {slackStatus.Expiration} }}");
 
             _webRequest = WebRequest.Create("https://slack.com/api/users.profile.set");
             _webRequest.ContentType = "application/x-www-form-urlencoded";
@@ -308,7 +252,7 @@ namespace OutlookSlackStatusAddIn
         }
 
 
-        private Tuple<string, string> GetSlackStatus()
+        private Tuple<string, string, int> GetSlackStatus()
         {
             string responseFromServer;
 
@@ -331,8 +275,10 @@ namespace OutlookSlackStatusAddIn
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             dynamic slackProfile = serializer.DeserializeObject(responseFromServer);
 
-            return Tuple.Create(slackProfile["profile"]["status_text"], 
-                slackProfile["profile"]["status_emoji"]);
+            return Tuple.Create(
+                slackProfile["profile"]["status_text"], 
+                slackProfile["profile"]["status_emoji"],
+                int.Parse(slackProfile["profile"]["status_expiration"]));
         }
 
 
