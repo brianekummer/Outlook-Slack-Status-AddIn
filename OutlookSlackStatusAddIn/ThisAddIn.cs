@@ -28,7 +28,7 @@ namespace OutlookSlackStatusAddIn
 
             _config = new SlackStatusAddInConfig();
 
-            if (_config.MySlackToken == null || _config.MyLastName == null)
+            if (_config.MySlackTokens.Count == 0 || _config.MyLastName == null)
             {
                 WriteToLog("  CONFIGURATION ERROR- No environment variables");
 
@@ -239,16 +239,20 @@ namespace OutlookSlackStatusAddIn
             byte[] byteArray = Encoding.UTF8.GetBytes(
                 $"profile={{'status_text': '{slackStatus.Text}', 'status_emoji': '{slackStatus.Emoji}', 'status_expiration': {slackStatus.Expiration} }}");
 
-            _webRequest = WebRequest.Create("https://slack.com/api/users.profile.set");
-            _webRequest.ContentType = "application/x-www-form-urlencoded";
-            _webRequest.ContentLength = byteArray.Length;
-            _webRequest.Method = "POST";
-            _webRequest.Headers.Add("Authorization", $"Bearer {_config.MySlackToken}");
-
-            using (Stream s = _webRequest.GetRequestStream())
+            // Change status for each Slack token we have
+            _config.MySlackTokens.ForEach(slackToken =>
             {
-                s.Write(byteArray, 0, byteArray.Length);
-            }
+                _webRequest = WebRequest.Create("https://slack.com/api/users.profile.set");
+                _webRequest.ContentType = "application/x-www-form-urlencoded";
+                _webRequest.ContentLength = byteArray.Length;
+                _webRequest.Method = "POST";
+                _webRequest.Headers.Add("Authorization", $"Bearer {slackToken}");
+
+                using (Stream s = _webRequest.GetRequestStream())
+                {
+                    s.Write(byteArray, 0, byteArray.Length);
+                }
+            });
         }
 
 
@@ -259,7 +263,7 @@ namespace OutlookSlackStatusAddIn
             _webRequest = WebRequest.Create("https://slack.com/api/users.profile.get");
             _webRequest.ContentType = "application/x-www-form-urlencoded";
             _webRequest.Method = "GET";
-            _webRequest.Headers.Add("Authorization", $"Bearer {_config.MySlackToken}");
+            _webRequest.Headers.Add("Authorization", $"Bearer {_config.MySlackTokens[0]}");
 
             using (WebResponse response = _webRequest.GetResponse())
             {

@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Xml;
 
 namespace OutlookSlackStatusAddIn
@@ -7,7 +9,7 @@ namespace OutlookSlackStatusAddIn
     {
         public SlackStatusAddInConfig()
         {
-            MySlackToken = Environment.GetEnvironmentVariable("SLACK_TOKEN");
+            MySlackTokens = Environment.GetEnvironmentVariable("SLACK_TOKEN")?.Split('|').ToList() ?? new List<string>();
             MyLastName = Environment.GetEnvironmentVariable("SLACK_LAST_NAME");
             OfficeNetworkNames = Environment.GetEnvironmentVariable("SLACK_OFFICE_NETWORKS");
             InMeeting = new SlackStatus(
@@ -24,7 +26,7 @@ namespace OutlookSlackStatusAddIn
                 ?? "Vacationing|:palm_tree:");
         }
 
-        public string MySlackToken;
+        public List<string> MySlackTokens;
         public string MyLastName;
         public string OfficeNetworkNames;
         public SlackStatus InMeeting;
